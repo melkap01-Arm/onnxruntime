@@ -14,10 +14,10 @@
 
 #include "kai/ukernels/dwconv/pack/kai_rhs_dwconv_pack_x32p1vlx1b_x32_x32_sme.h"
 
-const KaiF32DepthwiseConvKernel& dwconv = GetKleidiAIDepthwiseConvUKernel();
-
 namespace ArmKleidiAI {
 namespace {
+
+const KaiF32DepthwiseConvKernel& dwconv = GetKleidiAIDepthwiseConvUKernel();
 
 struct DwconvTlsBuffers {
     std::vector<float> feature_map_nhwc;
@@ -25,6 +25,22 @@ struct DwconvTlsBuffers {
     std::vector<std::byte> weights_packed;
     std::vector<float> nhwc_out;
     std::vector<float> bias_fallback;
+
+    void ReleaseLargeBuffers() {
+        MlasShrinkKleidiAIScratchIfTooLarge(feature_map_nhwc);
+        MlasShrinkKleidiAIScratchIfTooLarge(weights_hwcn);
+        MlasShrinkKleidiAIScratchIfTooLarge(weights_packed);
+        MlasShrinkKleidiAIScratchIfTooLarge(nhwc_out);
+        MlasShrinkKleidiAIScratchIfTooLarge(bias_fallback);
+    }
+};
+
+struct ScopedDwconvTlsCleanup {
+    DwconvTlsBuffers& buffers;
+
+    ~ScopedDwconvTlsCleanup() {
+        buffers.ReleaseLargeBuffers();
+    }
 };
 
 thread_local DwconvTlsBuffers g_dwconv_tls;
@@ -100,6 +116,27 @@ static void ConvertDepthwiseWeightsToHwcn(const float* src,
     }
 }
 
+static bool IsSupportedDepthwiseConfiguration(size_t filter_height,
+                                              size_t filter_width,
+                                              size_t stride_height,
+                                              size_t stride_width,
+                                              size_t dilation_height,
+                                              size_t dilation_width,
+                                              size_t pad_top,
+                                              size_t pad_left,
+                                              size_t pad_bottom,
+                                              size_t pad_right) {
+    if (filter_height != 3 || filter_width != 3 ||
+        stride_height != 1 || stride_width != 1 ||
+        dilation_height != 1 || dilation_width != 1) {
+        return false;
+    }
+
+    const bool zero_padding = pad_top == 0 && pad_left == 0 && pad_bottom == 0 && pad_right == 0;
+    const bool unit_padding = pad_top == 1 && pad_left == 1 && pad_bottom == 1 && pad_right == 1;
+    return zero_padding || unit_padding;
+}
+
 static bool TryComputeDepthwiseOutputShape(size_t in_height,
                                            size_t in_width,
                                            size_t filter_height,
@@ -157,24 +194,16 @@ DepthwiseConvKleidiAISupported(const MLAS_CONV_PARAMETERS* Parameters) {
         return false;
     }
 
-    // Kernel specialization is 3x3 with unit stride and dilation.
-    if (Parameters->KernelShape[0] != 3 || Parameters->KernelShape[1] != 3) {
-        return false;
-    }
-
-    if (Parameters->StrideShape[0] != 1 || Parameters->StrideShape[1] != 1) {
-        return false;
-    }
-
-    if (Parameters->DilationShape[0] != 1 || Parameters->DilationShape[1] != 1) {
-        return false;
-    }
-
-    const bool zero_padding = Parameters->Padding[0] == 0 && Parameters->Padding[1] == 0 &&
-                              Parameters->Padding[2] == 0 && Parameters->Padding[3] == 0;
-    const bool unit_padding = Parameters->Padding[0] == 1 && Parameters->Padding[1] == 1 &&
-                              Parameters->Padding[2] == 1 && Parameters->Padding[3] == 1;
-    if (!zero_padding && !unit_padding) {
+    if (!IsSupportedDepthwiseConfiguration(Parameters->KernelShape[0],
+                                           Parameters->KernelShape[1],
+                                           Parameters->StrideShape[0],
+                                           Parameters->StrideShape[1],
+                                           Parameters->DilationShape[0],
+                                           Parameters->DilationShape[1],
+                                           Parameters->Padding[0],
+                                           Parameters->Padding[1],
+                                           Parameters->Padding[2],
+                                           Parameters->Padding[3])) {
         return false;
     }
 
@@ -204,6 +233,10 @@ DepthwiseConvKleidiAI(size_t batches,
                       size_t channels,
                       size_t filter_height,
                       size_t filter_width,
+                      size_t stride_height,
+                      size_t stride_width,
+                      size_t dilation_height,
+                      size_t dilation_width,
                       size_t pad_top,
                       size_t pad_left,
                       size_t pad_bottom,
@@ -216,6 +249,19 @@ DepthwiseConvKleidiAI(size_t batches,
                       float clamp_min,
                       float clamp_max) {
     if (!UseSME2 || feature_map == nullptr || weights == nullptr || out == nullptr) {
+        return false;
+    }
+
+    if (!IsSupportedDepthwiseConfiguration(filter_height,
+                                           filter_width,
+                                           stride_height,
+                                           stride_width,
+                                           dilation_height,
+                                           dilation_width,
+                                           pad_top,
+                                           pad_left,
+                                           pad_bottom,
+                                           pad_right)) {
         return false;
     }
 
@@ -243,6 +289,7 @@ DepthwiseConvKleidiAI(size_t batches,
         return false;
     }
 
+    ScopedDwconvTlsCleanup cleanup{g_dwconv_tls};
     auto& tls = g_dwconv_tls;
 
     const float* feature_map_nhwc = feature_map;

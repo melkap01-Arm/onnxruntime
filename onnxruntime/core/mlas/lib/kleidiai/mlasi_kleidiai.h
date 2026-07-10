@@ -49,6 +49,16 @@
     #define KLEIDIAI_KERNEL_LOG(msg)
 #endif
 
+constexpr size_t MaximumRetainedKleidiAIScratchBytes = 8 * 1024 * 1024;
+
+template <typename T>
+void MlasShrinkKleidiAIScratchIfTooLarge(std::vector<T>& buffer)
+{
+    if (buffer.capacity() > MaximumRetainedKleidiAIScratchBytes / sizeof(T)) {
+        std::vector<T>().swap(buffer);
+    }
+}
+
 namespace ArmKleidiAI {
 
 // By default we should try for SME2 first before falling back to SME.
@@ -360,6 +370,10 @@ DepthwiseConvKleidiAI(
     size_t channels,
     size_t filter_height,
     size_t filter_width,
+    size_t stride_height,
+    size_t stride_width,
+    size_t dilation_height,
+    size_t dilation_width,
     size_t pad_top,
     size_t pad_left,
     size_t pad_bottom,

@@ -165,6 +165,10 @@ void RunDepthwiseConvCase(size_t channels, size_t in_height, size_t in_width, si
                                                          channels,
                                                          filter_height,
                                                          filter_width,
+                                                         1,
+                                                         1,
+                                                         1,
+                                                         1,
                                                          pad_top,
                                                          pad_left,
                                                          pad_bottom,
@@ -300,6 +304,51 @@ TEST(MlasKleidiDepthwiseTest, UnitPaddingNhwc) {
 
 TEST(MlasKleidiDepthwiseTest, MlasConvChannelsLast) {
   RunMlasConvChannelsLastCase(/*channels=*/32, /*in_height=*/8, /*in_width=*/8, /*padding=*/1);
+}
+
+TEST(MlasKleidiDepthwiseTest, RejectsUnsupportedDirectConfigurations) {
+  if (!MLAS_CPUIDINFO::GetCPUIDInfo().HasArm_SME2()) {
+    GTEST_SKIP() << "DepthwiseConvKleidiAI requires ARM64 SME2. Skipping test.";
+  }
+
+  constexpr size_t channels = 32;
+  constexpr size_t in_height = 8;
+  constexpr size_t in_width = 8;
+  std::vector<float> input(channels * in_height * in_width);
+  std::vector<float> weights(channels * 5 * 5);
+  std::vector<float> output(channels * in_height * in_width);
+
+  struct Configuration {
+    size_t filter_height;
+    size_t filter_width;
+    size_t stride_height;
+    size_t stride_width;
+    size_t dilation_height;
+    size_t dilation_width;
+    size_t pad_top;
+    size_t pad_left;
+    size_t pad_bottom;
+    size_t pad_right;
+  };
+
+  constexpr Configuration unsupported_configurations[] = {
+      {5, 3, 1, 1, 1, 1, 0, 0, 0, 0},
+      {3, 3, 2, 1, 1, 1, 0, 0, 0, 0},
+      {3, 3, 1, 1, 2, 1, 0, 0, 0, 0},
+      {3, 3, 1, 1, 1, 1, 1, 0, 1, 1},
+      {3, 3, 1, 1, 1, 1, 2, 2, 2, 2},
+  };
+
+  for (const auto& config : unsupported_configurations) {
+    EXPECT_FALSE(ArmKleidiAI::DepthwiseConvKleidiAI(
+        1, in_height, in_width, channels,
+        config.filter_height, config.filter_width,
+        config.stride_height, config.stride_width,
+        config.dilation_height, config.dilation_width,
+        config.pad_top, config.pad_left, config.pad_bottom, config.pad_right,
+        true, input.data(), weights.data(), nullptr, output.data(),
+        -std::numeric_limits<float>::max(), std::numeric_limits<float>::max()));
+  }
 }
 
 #endif  // defined(USE_KLEIDIAI) && !defined(_MSC_VER)
