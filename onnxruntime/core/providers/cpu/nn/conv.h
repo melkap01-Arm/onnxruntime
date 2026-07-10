@@ -61,6 +61,7 @@ class Conv<float> : public OpKernel {
   Status EnsurePackedChannelsLastFilter(concurrency::ThreadPool* thread_pool,
                                         size_t filter_count_per_group,
                                         size_t input_channels_per_group,
+                                        bool depthwise,
                                         const TensorShapeVector& kernel_shape,
                                         const TensorShapeVector& dilations) const;
 

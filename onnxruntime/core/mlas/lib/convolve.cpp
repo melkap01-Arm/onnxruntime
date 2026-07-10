@@ -16,6 +16,10 @@ Abstract:
 
 #include "mlasi.h"
 
+#if defined(USE_KLEIDIAI) && defined(MLAS_TARGET_ARM64)
+#include "kleidiai/mlasi_kleidiai.h"
+#endif
+
 //
 // Define the number of working buffer elements required per thread.
 //
@@ -1348,9 +1352,6 @@ static constexpr size_t ComputeChannelsLastConvOutSize(size_t input, size_t kern
 
     return 0;
 }
-
-constexpr size_t kKleidiAIDepthwiseRowsPerTile = 4;
-constexpr size_t kKleidiAIDepthwiseColsPerTile = 4;
 #endif
 
 }  // namespace
@@ -1437,7 +1438,8 @@ MlasConvSupportsDepthwiseChannelsLast2DFloatKernel(
     const size_t* Padding,
     const size_t* StrideShape,
     size_t FilterCount,
-    float Beta)
+    float Beta,
+    const MLAS_BACKEND_KERNEL_SELECTOR_CONFIG* BackendKernelSelectorConfig)
 {
 #if !defined(USE_KLEIDIAI) || !defined(MLAS_TARGET_ARM64)
     MLAS_UNREFERENCED_PARAMETER(Dimensions);
@@ -1451,8 +1453,14 @@ MlasConvSupportsDepthwiseChannelsLast2DFloatKernel(
     MLAS_UNREFERENCED_PARAMETER(StrideShape);
     MLAS_UNREFERENCED_PARAMETER(FilterCount);
     MLAS_UNREFERENCED_PARAMETER(Beta);
+    MLAS_UNREFERENCED_PARAMETER(BackendKernelSelectorConfig);
     return false;
 #else
+    if (BackendKernelSelectorConfig != nullptr && !BackendKernelSelectorConfig->use_kleidiai) {
+        return false;
+    }
+
+    // Channels-last dispatch requires both KleidiAI overrides; generic MLAS convolution expects NCHW.
     if (GetMlasPlatform().MlasConvPrepareOverride == nullptr ||
         GetMlasPlatform().MlasConvOverride == nullptr) {
         return false;
@@ -1492,7 +1500,8 @@ MlasConvSupportsDepthwiseChannelsLast2DFloatKernel(
         ComputeChannelsLastConvOutSize(InputShape[0], KernelShape[0], Padding[0], StrideShape[0]);
     const size_t output_w =
         ComputeChannelsLastConvOutSize(InputShape[1], KernelShape[1], Padding[1], StrideShape[1]);
-    return output_h >= kKleidiAIDepthwiseRowsPerTile && output_w >= kKleidiAIDepthwiseColsPerTile;
+    return output_h >= ArmKleidiAI::GetDepthwiseConvKleidiAIRowsPerTile() &&
+           output_w >= ArmKleidiAI::GetDepthwiseConvKleidiAIColsPerTile();
 #endif
 }
 

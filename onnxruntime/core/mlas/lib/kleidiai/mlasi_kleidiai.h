@@ -66,6 +66,14 @@ inline const bool UseSME2 = MLAS_CPUIDINFO::GetCPUIDInfo().HasArm_SME2();
 inline const bool UseSME = MLAS_CPUIDINFO::GetCPUIDInfo().HasArm_SME();
 inline const std::string_view vendor_name = MLAS_CPUIDINFO::GetCPUIDInfo().GetCPUVendor();
 
+size_t
+MLASCALL
+GetDepthwiseConvKleidiAIRowsPerTile();
+
+size_t
+MLASCALL
+GetDepthwiseConvKleidiAIColsPerTile();
+
 bool
 MLASCALL
 DepthwiseConvKleidiAISupported(
@@ -382,9 +390,24 @@ DepthwiseConvKleidiAI(
     const float* feature_map,
     const float* weights,
     const float* bias,
+    const void* packed_filter,
     float* out,
     float clamp_min,
-    float clamp_max
+    float clamp_max,
+    MLAS_THREADPOOL* ThreadPool
+    );
+
+size_t
+MLASCALL
+MlasConvDepthwiseFloatPackWSize(size_t Channels);
+
+void
+MLASCALL
+MlasConvDepthwiseFloatPackW(
+    size_t Channels,
+    const float* Filter,
+    const float* Bias,
+    void* PackedFilter
     );
 
 size_t

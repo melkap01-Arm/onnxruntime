@@ -433,7 +433,7 @@ TEST(NhwcTransformerTests, ConvGlobalAveragePool) {
                     TransformerLevel::Level3);
 }
 
-TEST(NhwcTransformerTests, ConvDepthwiseFloat_SkipNhwcUntilDepthwiseKernelEnabled) {
+TEST(NhwcTransformerTests, ConvDepthwiseFloat_UsesNhwcWhenSupported) {
   auto build_test_case = [&](ModelTestBuilder& builder) {
     auto* input_arg = builder.MakeInput<float>({1, 8, 7, 7}, -1.0f, 1.0f);
     auto* weight_arg = builder.MakeInitializer<float>({8, 1, 3, 3}, -1.0f, 1.0f);
@@ -445,7 +445,14 @@ TEST(NhwcTransformerTests, ConvDepthwiseFloat_SkipNhwcUntilDepthwiseKernelEnable
 
   auto check_nhwc_graph = [&](InferenceSessionWrapper& session) {
     auto op_to_count = CountOpsInGraph(session.GetGraph());
-    EXPECT_FALSE(HasFloatNhwcNoTransposeSupport({1, 8, 7, 7}, {8, 1, 3, 3}, {}, {}, {}, 8));
+    const bool expect_nhwc = HasFloatNhwcNoTransposeSupport({1, 8, 7, 7}, {8, 1, 3, 3}, {}, {}, {}, 8);
+    if (expect_nhwc) {
+      EXPECT_EQ(op_to_count["Conv"] + op_to_count["com.microsoft.nchwc.Conv"], 0);
+      EXPECT_EQ(op_to_count["com.microsoft.NhwcFusedConv"], 1);
+      EXPECT_EQ(op_to_count["Transpose"], 2);
+      return;
+    }
+
     EXPECT_EQ(op_to_count["Conv"] + op_to_count["com.microsoft.nchwc.Conv"], 1);
     EXPECT_EQ(op_to_count["com.microsoft.NhwcFusedConv"], 0);
     EXPECT_EQ(op_to_count["Transpose"], 0);

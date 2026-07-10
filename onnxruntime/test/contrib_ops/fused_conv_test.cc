@@ -499,10 +499,11 @@ TEST(FusedConvTest, Cpu_NhwcDepthwiseConv2D_SymmetricPadding) {
       "Relu"                        // activation
   };
 
-  vector<int64_t> X_shape = {1, 3, 3, 2};
-  vector<float> X = {1.0f, 10.0f, 2.0f, 20.0f, 3.0f, 30.0f,
-                     4.0f, 40.0f, 5.0f, 50.0f, 6.0f, 60.0f,
-                     7.0f, 70.0f, 8.0f, 80.0f, 9.0f, 90.0f};
+  vector<int64_t> X_shape = {1, 4, 4, 2};
+  vector<float> X = {1.0f, 10.0f, 2.0f, 20.0f, 3.0f, 30.0f, 4.0f, 40.0f,
+                     5.0f, 50.0f, 6.0f, 60.0f, 7.0f, 70.0f, 8.0f, 80.0f,
+                     9.0f, 90.0f, 10.0f, 100.0f, 11.0f, 110.0f, 12.0f, 120.0f,
+                     13.0f, 130.0f, 14.0f, 140.0f, 15.0f, 150.0f, 16.0f, 160.0f};
   vector<int64_t> W_shape = {2, 1, 3, 3};
   vector<float> W = {1.0f, 1.0f, 1.0f,
                      1.0f, 1.0f, 1.0f,
@@ -510,10 +511,11 @@ TEST(FusedConvTest, Cpu_NhwcDepthwiseConv2D_SymmetricPadding) {
                      1.0f, 0.0f, 1.0f,
                      0.0f, 2.0f, 0.0f,
                      1.0f, 0.0f, 1.0f};
-  vector<int64_t> Y_shape = {1, 3, 3, 2};
-  auto expected_vals = {12.0f, 70.0f, 21.0f, 140.0f, 16.0f, 110.0f,
-                        27.0f, 180.0f, 45.0f, 300.0f, 33.0f, 220.0f,
-                        24.0f, 190.0f, 39.0f, 260.0f, 28.0f, 230.0f};
+  vector<int64_t> Y_shape = {1, 4, 4, 2};
+  auto expected_vals = {14.0f, 80.0f, 24.0f, 160.0f, 30.0f, 200.0f, 22.0f, 150.0f,
+                        33.0f, 220.0f, 54.0f, 360.0f, 63.0f, 420.0f, 45.0f, 300.0f,
+                        57.0f, 380.0f, 90.0f, 600.0f, 99.0f, 660.0f, 69.0f, 460.0f,
+                        46.0f, 360.0f, 72.0f, 480.0f, 78.0f, 520.0f, 54.0f, 430.0f};
 
   if (!HasFloatNhwcNoTransposeSupport(X_shape, W_shape, attrs.pads, attrs.strides, attrs.group)) {
     GTEST_SKIP() << "Float NHWC depthwise fast-path is not available on this configuration.";

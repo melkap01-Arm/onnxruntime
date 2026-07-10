@@ -10,6 +10,7 @@
 #include "core/mlas/lib/kleidiai/mlasi_kleidiai.h"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <random>
@@ -92,7 +93,12 @@ void DepthwiseReferenceNchw(const float* input,
   }
 }
 
-void RunDepthwiseConvCase(size_t channels, size_t in_height, size_t in_width, size_t padding, bool channels_last) {
+void RunDepthwiseConvCase(size_t channels,
+                          size_t in_height,
+                          size_t in_width,
+                          size_t padding,
+                          bool channels_last,
+                          bool use_threadpool = false) {
   if (!MLAS_CPUIDINFO::GetCPUIDInfo().HasArm_SME2()) {
     GTEST_SKIP() << "DepthwiseConvKleidiAI requires ARM64 SME2. Skipping test.";
   }
@@ -177,9 +183,11 @@ void RunDepthwiseConvCase(size_t channels, size_t in_height, size_t in_width, si
                                                          input_data,
                                                          weights.data(),
                                                          bias.data(),
+                                                         nullptr,
                                                          output.data(),
                                                          clamp_min,
-                                                         clamp_max);
+                                                         clamp_max,
+                                                         use_threadpool ? GetMlasThreadPool() : nullptr);
   ASSERT_TRUE(status);
 
   for (size_t i = 0; i < output_size; ++i) {
@@ -187,12 +195,18 @@ void RunDepthwiseConvCase(size_t channels, size_t in_height, size_t in_width, si
   }
 }
 
-void RunMlasConvChannelsLastCase(size_t channels, size_t in_height, size_t in_width, size_t padding) {
+void RunMlasConvCase(size_t channels,
+                     size_t in_height,
+                     size_t in_width,
+                     size_t padding,
+                     size_t batches,
+                     bool channels_last,
+                     bool use_kleidiai,
+                     bool prepacked) {
   if (!MLAS_CPUIDINFO::GetCPUIDInfo().HasArm_SME2()) {
     GTEST_SKIP() << "DepthwiseConvKleidiAI requires ARM64 SME2. Skipping test.";
   }
 
-  constexpr size_t batches = 1;
   constexpr size_t filter_height = 3;
   constexpr size_t filter_width = 3;
   constexpr size_t filter_count = 1;
@@ -240,6 +254,8 @@ void RunMlasConvChannelsLastCase(size_t channels, size_t in_height, size_t in_wi
                          expected.data());
   ConvertNchwToNhwc(input.data(), input_nhwc.data(), batches, channels, in_height, in_width);
   ConvertNchwToNhwc(expected.data(), expected_nhwc.data(), batches, channels, out_height, out_width);
+  const float* input_data = channels_last ? input_nhwc.data() : input.data();
+  const float* expected_data = channels_last ? expected_nhwc.data() : expected.data();
 
   const int64_t input_shape[] = {static_cast<int64_t>(in_height), static_cast<int64_t>(in_width)};
   const int64_t kernel_shape[] = {static_cast<int64_t>(filter_height), static_cast<int64_t>(filter_width)};
@@ -252,6 +268,9 @@ void RunMlasConvChannelsLastCase(size_t channels, size_t in_height, size_t in_wi
   activation.ActivationKind = MlasIdentityActivation;
 
   MLAS_CONV_PARAMETERS parameters{};
+  MLAS_BACKEND_KERNEL_SELECTOR_CONFIG selector_config{};
+  selector_config.use_kleidiai = use_kleidiai;
+  parameters.BackendKernelSelectorConfig = &selector_config;
   size_t working_buffer_size = 0;
   MlasConvPrepare(&parameters,
                   2,
@@ -267,20 +286,37 @@ void RunMlasConvChannelsLastCase(size_t channels, size_t in_height, size_t in_wi
                   filter_count,
                   &activation,
                   &working_buffer_size,
-                  true,
+                  channels_last,
                   0.0f,
                   nullptr);
+
+  if (batches != 1 || !use_kleidiai) {
+    EXPECT_EQ(ArmKleidiAI::SelectConvRoute(&parameters).route, ArmKleidiAI::ConvRoute::NoKleidiAi);
+  }
+
+  const float* filter_data = weights.data();
+  std::vector<std::byte> packed_filter;
+  if (prepacked) {
+    packed_filter.resize(ArmKleidiAI::MlasConvDepthwiseFloatPackWSize(channels));
+    ArmKleidiAI::MlasConvDepthwiseFloatPackW(
+        channels, weights.data(), bias.data(), packed_filter.data());
+    parameters.FilterIsPacked = true;
+    parameters.PackedFilter = packed_filter.data();
+    parameters.PackedFilterGroupStride = packed_filter.size();
+    filter_data = nullptr;
+  }
+
   std::vector<float> working_buffer(working_buffer_size);
   MlasConv(&parameters,
-           input_nhwc.data(),
-           weights.data(),
+           input_data,
+           filter_data,
            bias.data(),
            working_buffer.data(),
            output.data(),
            nullptr);
 
   for (size_t i = 0; i < output_size; ++i) {
-    EXPECT_NEAR(expected_nhwc[i], output[i], 1e-4f) << "Mismatch at element " << i;
+    EXPECT_NEAR(expected_data[i], output[i], 1e-4f) << "Mismatch at element " << i;
   }
 }
 
@@ -303,7 +339,94 @@ TEST(MlasKleidiDepthwiseTest, UnitPaddingNhwc) {
 }
 
 TEST(MlasKleidiDepthwiseTest, MlasConvChannelsLast) {
-  RunMlasConvChannelsLastCase(/*channels=*/32, /*in_height=*/8, /*in_width=*/8, /*padding=*/1);
+  RunMlasConvCase(/*channels=*/32, /*in_height=*/8, /*in_width=*/8, /*padding=*/1,
+                  /*batches=*/1, /*channels_last=*/true, /*use_kleidiai=*/true, /*prepacked=*/false);
+}
+
+TEST(MlasKleidiDepthwiseTest, LargeChannelCount) {
+  RunDepthwiseConvCase(/*channels=*/128, /*in_height=*/8, /*in_width=*/8, /*padding=*/1,
+                       /*channels_last=*/true);
+}
+
+TEST(MlasKleidiDepthwiseTest, NonVectorAlignedChannelCount) {
+  RunDepthwiseConvCase(/*channels=*/130, /*in_height=*/8, /*in_width=*/8, /*padding=*/1,
+                       /*channels_last=*/true);
+}
+
+TEST(MlasKleidiDepthwiseTest, ThreadedRows) {
+  RunDepthwiseConvCase(/*channels=*/130, /*in_height=*/32, /*in_width=*/8, /*padding=*/1,
+                       /*channels_last=*/true, /*use_threadpool=*/true);
+}
+
+TEST(MlasKleidiDepthwiseTest, MlasConvChannelsLastPrepacked) {
+  RunMlasConvCase(/*channels=*/32, /*in_height=*/8, /*in_width=*/8, /*padding=*/1,
+                  /*batches=*/1, /*channels_last=*/true, /*use_kleidiai=*/true, /*prepacked=*/true);
+}
+
+TEST(MlasKleidiDepthwiseTest, BatchFallback) {
+  RunMlasConvCase(/*channels=*/32, /*in_height=*/8, /*in_width=*/8, /*padding=*/1,
+                  /*batches=*/2, /*channels_last=*/false, /*use_kleidiai=*/true, /*prepacked=*/false);
+}
+
+TEST(MlasKleidiDepthwiseTest, SelectorOptOutFallback) {
+  RunMlasConvCase(/*channels=*/32, /*in_height=*/8, /*in_width=*/8, /*padding=*/1,
+                  /*batches=*/1, /*channels_last=*/false, /*use_kleidiai=*/false, /*prepacked=*/false);
+}
+
+TEST(MlasKleidiDepthwiseTest, RejectsOutputSmallerThanTile) {
+  if (!MLAS_CPUIDINFO::GetCPUIDInfo().HasArm_SME2()) {
+    GTEST_SKIP() << "DepthwiseConvKleidiAI requires ARM64 SME2. Skipping test.";
+  }
+
+  MLAS_CONV_PARAMETERS parameters{};
+  parameters.Dimensions = 2;
+  parameters.BatchCount = 1;
+  parameters.GroupCount = 32;
+  parameters.InputChannels = 1;
+  parameters.FilterCount = 1;
+  parameters.InputShape[0] = 5;
+  parameters.InputShape[1] = 8;
+  parameters.KernelShape[0] = 3;
+  parameters.KernelShape[1] = 3;
+  parameters.DilationShape[0] = 1;
+  parameters.DilationShape[1] = 1;
+  parameters.StrideShape[0] = 1;
+  parameters.StrideShape[1] = 1;
+
+  EXPECT_FALSE(ArmKleidiAI::DepthwiseConvKleidiAISupported(&parameters));
+}
+
+TEST(MlasKleidiDepthwiseTest, StaticSupportHonorsSelectorOptOut) {
+  if (!MLAS_CPUIDINFO::GetCPUIDInfo().HasArm_SME2()) {
+    GTEST_SKIP() << "DepthwiseConvKleidiAI requires ARM64 SME2. Skipping test.";
+  }
+
+  const size_t input_shape[] = {8, 8};
+  const size_t kernel_shape[] = {3, 3};
+  const size_t dilation_shape[] = {1, 1};
+  const size_t padding[] = {1, 1, 1, 1};
+  const size_t stride_shape[] = {1, 1};
+  MLAS_BACKEND_KERNEL_SELECTOR_CONFIG selector_config{};
+
+  const auto is_supported = [&] {
+    return MlasConvSupportsDepthwiseChannelsLast2DFloatKernel(
+        /*Dimensions=*/2,
+        /*BatchCount=*/1,
+        /*GroupCount=*/32,
+        /*InputChannelsPerGroup=*/1,
+        input_shape,
+        kernel_shape,
+        dilation_shape,
+        padding,
+        stride_shape,
+        /*FilterCount=*/1,
+        /*Beta=*/0.0f,
+        &selector_config);
+  };
+
+  ASSERT_TRUE(is_supported());
+  selector_config.use_kleidiai = false;
+  EXPECT_FALSE(is_supported());
 }
 
 TEST(MlasKleidiDepthwiseTest, RejectsUnsupportedDirectConfigurations) {
@@ -346,8 +469,9 @@ TEST(MlasKleidiDepthwiseTest, RejectsUnsupportedDirectConfigurations) {
         config.stride_height, config.stride_width,
         config.dilation_height, config.dilation_width,
         config.pad_top, config.pad_left, config.pad_bottom, config.pad_right,
-        true, input.data(), weights.data(), nullptr, output.data(),
-        -std::numeric_limits<float>::max(), std::numeric_limits<float>::max()));
+        true, input.data(), weights.data(), nullptr, nullptr, output.data(),
+        -std::numeric_limits<float>::max(), std::numeric_limits<float>::max(),
+        nullptr));
   }
 }
 

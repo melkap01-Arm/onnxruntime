@@ -161,7 +161,8 @@ bool TryComputeFloatNhwcPads(const api::NodeRef& node,
 }
 
 bool FloatNhwcWrapperFilter(const onnx_transpose_optimization::api::GraphRef& graph,
-                            onnx_transpose_optimization::api::NodeRef& node) {
+                            onnx_transpose_optimization::api::NodeRef& node,
+                            const MLAS_BACKEND_KERNEL_SELECTOR_CONFIG* backend_kernel_selector_config) {
   auto& base_node = NodeFromApiNode(node);
 
   ORT_UNUSED_PARAMETER(graph);
@@ -264,7 +265,8 @@ bool FloatNhwcWrapperFilter(const onnx_transpose_optimization::api::GraphRef& gr
       pads.data(),
       strides.data(),
       filter_count,
-      /*Beta*/ 0.0f);
+      /*Beta*/ 0.0f,
+      backend_kernel_selector_config);
 #endif
 }
 
@@ -411,8 +413,8 @@ NhwcTransformer::NhwcTransformer(AllocatorPtr cpu_allocator,
     if (status.IsOK() && kernel_create_info != nullptr) {
       kernel_create_info = nullptr;
 
-      const auto filter = [](const api::GraphRef& graph, api::NodeRef& node) {
-        return FloatNhwcWrapperFilter(graph, node);
+      const auto filter = [mlas_backend_kernel_selector_config](const api::GraphRef& graph, api::NodeRef& node) {
+        return FloatNhwcWrapperFilter(graph, node, &mlas_backend_kernel_selector_config);
       };
 
       conv_table_.emplace(

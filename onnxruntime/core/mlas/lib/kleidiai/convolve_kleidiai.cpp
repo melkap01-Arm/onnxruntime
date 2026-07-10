@@ -816,9 +816,11 @@ ArmKleidiAI::MlasConv(
                                   Input,
                                   Filter,
                                   Bias,
+                                  Parameters->PackedFilter,
                                   Output,
                                   -std::numeric_limits<float>::max(),
-                                  std::numeric_limits<float>::max())) {
+                                  std::numeric_limits<float>::max(),
+                                  ThreadPool)) {
             const size_t activation_rows = Parameters->ChannelsLast
                                                ? Parameters->OutputSize
                                                : Parameters->GroupCount * Parameters->FilterCount;

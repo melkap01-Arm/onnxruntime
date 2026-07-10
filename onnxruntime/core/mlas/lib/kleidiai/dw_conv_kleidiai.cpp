@@ -46,6 +46,8 @@ struct ScopedDwconvTlsCleanup {
 thread_local DwconvTlsBuffers g_dwconv_tls;
 
 constexpr size_t kDwconvColsPerTile = 4;
+constexpr size_t kDwconvFilterHeight = 3;
+constexpr size_t kDwconvFilterWidth = 3;
 
 static void ConvertNchwToNhwc(const float* src,
                               float* dst,
@@ -116,6 +118,37 @@ static void ConvertDepthwiseWeightsToHwcn(const float* src,
     }
 }
 
+static void PackDepthwiseWeights(const float* weights,
+                                 const float* bias,
+                                 size_t channels,
+                                 size_t filter_height,
+                                 size_t filter_width,
+                                 std::vector<float>& weights_hwcn,
+                                 std::vector<float>& bias_fallback,
+                                 void* packed_weights) {
+    weights_hwcn.resize(filter_height * filter_width * channels);
+    ConvertDepthwiseWeightsToHwcn(
+        weights, weights_hwcn.data(), channels, filter_height, filter_width);
+
+    const float* bias_data = bias;
+    if (bias_data == nullptr) {
+        bias_fallback.assign(channels, 0.0f);
+        bias_data = bias_fallback.data();
+    }
+
+    KLEIDIAI_KERNEL_LOG("kai_run_rhs_dwconv_pack_x32p1vlx1b_x32_x32_sme"
+                        << " filter_height=" << filter_height << " filter_width=" << filter_width
+                        << " channels=" << channels);
+    kai_run_rhs_dwconv_pack_x32p1vlx1b_x32_x32_sme(filter_height,
+                                                   filter_width,
+                                                   filter_height,
+                                                   filter_width,
+                                                   channels,
+                                                   weights_hwcn.data(),
+                                                   bias_data,
+                                                   packed_weights);
+}
+
 static bool IsSupportedDepthwiseConfiguration(size_t filter_height,
                                               size_t filter_width,
                                               size_t stride_height,
@@ -126,7 +159,7 @@ static bool IsSupportedDepthwiseConfiguration(size_t filter_height,
                                               size_t pad_left,
                                               size_t pad_bottom,
                                               size_t pad_right) {
-    if (filter_height != 3 || filter_width != 3 ||
+    if (filter_height != kDwconvFilterHeight || filter_width != kDwconvFilterWidth ||
         stride_height != 1 || stride_width != 1 ||
         dilation_height != 1 || dilation_width != 1) {
         return false;
@@ -160,6 +193,44 @@ static bool TryComputeDepthwiseOutputShape(size_t in_height,
 }
 
 }  // namespace
+
+size_t
+MLASCALL
+GetDepthwiseConvKleidiAIRowsPerTile() {
+    return dwconv.ukernel.get_m_step();
+}
+
+size_t
+MLASCALL
+GetDepthwiseConvKleidiAIColsPerTile() {
+    return kDwconvColsPerTile;
+}
+
+size_t
+MLASCALL
+MlasConvDepthwiseFloatPackWSize(size_t Channels) {
+    return kai_rhs_get_dst_size_dwconv_pack_x32p1vlx1b_x32_x32_sme(
+        kDwconvFilterHeight, kDwconvFilterWidth, Channels);
+}
+
+void
+MLASCALL
+MlasConvDepthwiseFloatPackW(
+    size_t Channels,
+    const float* Filter,
+    const float* Bias,
+    void* PackedFilter) {
+    std::vector<float> weights_hwcn;
+    std::vector<float> bias_fallback;
+    PackDepthwiseWeights(Filter,
+                         Bias,
+                         Channels,
+                         kDwconvFilterHeight,
+                         kDwconvFilterWidth,
+                         weights_hwcn,
+                         bias_fallback,
+                         PackedFilter);
+}
 
 bool
 MLASCALL
@@ -222,7 +293,8 @@ DepthwiseConvKleidiAISupported(const MLAS_CONV_PARAMETERS* Parameters) {
         return false;
     }
 
-    return out_height >= dwconv.ukernel.get_m_step() && out_width >= kDwconvColsPerTile;
+    return out_height >= GetDepthwiseConvKleidiAIRowsPerTile() &&
+           out_width >= GetDepthwiseConvKleidiAIColsPerTile();
 }
 
 bool
@@ -245,10 +317,13 @@ DepthwiseConvKleidiAI(size_t batches,
                       const float* feature_map,
                       const float* weights,
                       const float* bias,
+                      const void* packed_filter,
                       float* out,
                       float clamp_min,
-                      float clamp_max) {
-    if (!UseSME2 || feature_map == nullptr || weights == nullptr || out == nullptr) {
+                      float clamp_max,
+                      MLAS_THREADPOOL* ThreadPool) {
+    if (!UseSME2 || feature_map == nullptr || out == nullptr ||
+        (weights == nullptr && packed_filter == nullptr)) {
         return false;
     }
 
@@ -284,8 +359,9 @@ DepthwiseConvKleidiAI(size_t batches,
         return false;
     }
 
-    const size_t rows_handled = dwconv.ukernel.get_m_step();
-    if (out_height < rows_handled || out_width < kDwconvColsPerTile) {
+    const size_t rows_handled = GetDepthwiseConvKleidiAIRowsPerTile();
+    if (out_height < rows_handled ||
+        out_width < GetDepthwiseConvKleidiAIColsPerTile()) {
         return false;
     }
 
@@ -300,30 +376,20 @@ DepthwiseConvKleidiAI(size_t batches,
         feature_map_nhwc = tls.feature_map_nhwc.data();
     }
 
-    const size_t weights_size = filter_height * filter_width * channels;
-    tls.weights_hwcn.resize(weights_size);
-    ConvertDepthwiseWeightsToHwcn(weights, tls.weights_hwcn.data(), channels, filter_height, filter_width);
-
-    const float* bias_data = bias;
-    if (bias_data == nullptr) {
-        tls.bias_fallback.assign(channels, 0.0f);
-        bias_data = tls.bias_fallback.data();
+    const void* packed_weights = packed_filter;
+    if (packed_weights == nullptr) {
+        const size_t packed_size_bytes = MlasConvDepthwiseFloatPackWSize(channels);
+        tls.weights_packed.resize(packed_size_bytes);
+        PackDepthwiseWeights(weights,
+                             bias,
+                             channels,
+                             filter_height,
+                             filter_width,
+                             tls.weights_hwcn,
+                             tls.bias_fallback,
+                             tls.weights_packed.data());
+        packed_weights = tls.weights_packed.data();
     }
-
-    const size_t packed_size_bytes =
-        kai_rhs_get_dst_size_dwconv_pack_x32p1vlx1b_x32_x32_sme(filter_height, filter_width, channels);
-    tls.weights_packed.resize(packed_size_bytes);
-    KLEIDIAI_KERNEL_LOG("kai_run_rhs_dwconv_pack_x32p1vlx1b_x32_x32_sme"
-                        << " filter_height=" << filter_height << " filter_width=" << filter_width
-                        << " channels=" << channels);
-    kai_run_rhs_dwconv_pack_x32p1vlx1b_x32_x32_sme(filter_height,
-                                                   filter_width,
-                                                   filter_height,
-                                                   filter_width,
-                                                   channels,
-                                                   tls.weights_hwcn.data(),
-                                                   bias_data,
-                                                   tls.weights_packed.data());
 
     float* nhwc_out = out;
     if (!channels_last) {
@@ -334,7 +400,9 @@ DepthwiseConvKleidiAI(size_t batches,
 
     const size_t in_row_stride_elements = in_width * channels;
     const size_t out_row_stride_elements = out_width * channels;
-    for (size_t out_row = 0; out_row < out_height; out_row += rows_handled) {
+    const ptrdiff_t row_tile_count = static_cast<ptrdiff_t>((out_height - 1) / rows_handled + 1);
+    MlasTrySimpleParallel(ThreadPool, row_tile_count, [&](ptrdiff_t row_tile) {
+        const size_t out_row = static_cast<size_t>(row_tile) * rows_handled;
         const ptrdiff_t start_in_row = static_cast<ptrdiff_t>(out_row) - static_cast<ptrdiff_t>(pad_top);
         const size_t kernel_pad_top = start_in_row < 0 ? static_cast<size_t>(-start_in_row) : 0;
         const size_t in_row = start_in_row < 0 ? 0 : static_cast<size_t>(start_in_row);
@@ -355,7 +423,7 @@ DepthwiseConvKleidiAI(size_t batches,
                             << " valid_dst_rows=" << rows_to_process
                             << " pad_left=" << pad_left << " pad_top=" << kernel_pad_top);
         dwconv.ukernel.run_dwconv(inptr,
-                                  tls.weights_packed.data(),
+                                  packed_weights,
                                   outptr,
                                   in_row_stride_elements * sizeof(float),
                                   channels * sizeof(float),
@@ -368,7 +436,7 @@ DepthwiseConvKleidiAI(size_t batches,
                                   0.0f,
                                   clamp_min,
                                   clamp_max);
-    }
+    });
 
     if (!channels_last) {
         ConvertNhwcToNchw(nhwc_out, out, batches, channels, out_height, out_width);

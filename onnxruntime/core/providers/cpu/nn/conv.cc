@@ -195,6 +195,7 @@ Status Conv<T>::Compute(OpKernelContext* context) const {
 Status Conv<float>::EnsurePackedChannelsLastFilter(concurrency::ThreadPool* thread_pool,
                                                    size_t filter_count_per_group,
                                                    size_t input_channels_per_group,
+                                                   bool depthwise,
                                                    const TensorShapeVector& kernel_shape,
                                                    const TensorShapeVector& dilations) const {
   if (!can_cache_packed_filter_) {
@@ -211,11 +212,14 @@ Status Conv<float>::EnsurePackedChannelsLastFilter(concurrency::ThreadPool* thre
       return;
     }
 
+    const size_t group_count = onnxruntime::narrow<size_t>(conv_attrs_.group);
     packed_filter_group_stride_ =
-        ArmKleidiAI::MlasConvSymmetricChannelsLast2DFloatPackWSize(filter_count_per_group,
-                                                                   input_channels_per_group,
-                                                                   kernel_shape.data(),
-                                                                   dilations.data());
+        depthwise
+            ? ArmKleidiAI::MlasConvDepthwiseFloatPackWSize(group_count)
+            : ArmKleidiAI::MlasConvSymmetricChannelsLast2DFloatPackWSize(filter_count_per_group,
+                                                                         input_channels_per_group,
+                                                                         kernel_shape.data(),
+                                                                         dilations.data());
     if (packed_filter_group_stride_ == 0) {
       packed_filter_status_ = ORT_MAKE_STATUS(ONNXRUNTIME, FAIL,
                                               "Failed to get KleidiAI packed filter size.");
@@ -223,20 +227,30 @@ Status Conv<float>::EnsurePackedChannelsLastFilter(concurrency::ThreadPool* thre
     }
 
     const size_t packed_filter_size =
-        packed_filter_group_stride_ * onnxruntime::narrow<size_t>(conv_attrs_.group);
+        depthwise ? packed_filter_group_stride_
+                  : packed_filter_group_stride_ * group_count;
     packed_filter_ = IAllocator::MakeUniquePtr<void>(alloc, packed_filter_size, true);
     memset(packed_filter_.get(), 0, packed_filter_size);
 
-    ArmKleidiAI::MlasConvSymmetricChannelsLast2DFloatPackW(filter_count_per_group,
-                                                           input_channels_per_group,
-                                                           kernel_shape.data(),
-                                                           dilations.data(),
-                                                           onnxruntime::narrow<size_t>(conv_attrs_.group),
-                                                           constant_filter_tensor_->Data<float>(),
-                                                           constant_bias_tensor_ ? constant_bias_tensor_->Data<float>() : nullptr,
-                                                           packed_filter_.get(),
-                                                           packed_filter_group_stride_,
-                                                           thread_pool);
+    if (depthwise) {
+      ArmKleidiAI::MlasConvDepthwiseFloatPackW(
+          group_count,
+          constant_filter_tensor_->Data<float>(),
+          constant_bias_tensor_ ? constant_bias_tensor_->Data<float>() : nullptr,
+          packed_filter_.get());
+    } else {
+      ArmKleidiAI::MlasConvSymmetricChannelsLast2DFloatPackW(
+          filter_count_per_group,
+          input_channels_per_group,
+          kernel_shape.data(),
+          dilations.data(),
+          group_count,
+          constant_filter_tensor_->Data<float>(),
+          constant_bias_tensor_ ? constant_bias_tensor_->Data<float>() : nullptr,
+          packed_filter_.get(),
+          packed_filter_group_stride_,
+          thread_pool);
+    }
   });
 
   return packed_filter_status_;
@@ -318,6 +332,21 @@ Status Conv<float>::Compute(OpKernelContext* context) const {
   const size_t group_count = narrow<size_t>(conv_attrs_.group);
   const size_t input_channels_per_group = narrow<size_t>(C / conv_attrs_.group);
   const size_t filter_count_per_group = narrow<size_t>(M / conv_attrs_.group);
+  const bool depthwise_nhwc_fastpath =
+      wants_channels_last && !sum_present &&
+      MlasConvSupportsDepthwiseChannelsLast2DFloatKernel(
+          kernel_rank,
+          narrow<size_t>(N),
+          group_count,
+          input_channels_per_group,
+          input_shape_size_t.data(),
+          kernel_shape_size_t.data(),
+          dilations_size_t.data(),
+          pads_size_t.data(),
+          strides_size_t.data(),
+          filter_count_per_group,
+          /*Beta*/ 0.0f,
+          &mlas_backend_kernel_selector_config_);
   const bool nhwc_fastpath =
       wants_channels_last && !sum_present &&
       (MlasConvSupportsDenseChannelsLast2DFloatKernel(
@@ -331,24 +360,14 @@ Status Conv<float>::Compute(OpKernelContext* context) const {
            strides_size_t.data(),
            filter_count_per_group,
            /*Beta*/ 0.0f) ||
-       MlasConvSupportsDepthwiseChannelsLast2DFloatKernel(
-           kernel_rank,
-           narrow<size_t>(N),
-           group_count,
-           input_channels_per_group,
-           input_shape_size_t.data(),
-           kernel_shape_size_t.data(),
-           dilations_size_t.data(),
-           pads_size_t.data(),
-           strides_size_t.data(),
-           filter_count_per_group,
-           /*Beta*/ 0.0f));
+       depthwise_nhwc_fastpath);
 
 #if defined(USE_KLEIDIAI) && defined(MLAS_TARGET_ARM64)
   if (nhwc_fastpath && can_cache_packed_filter_) {
     ORT_RETURN_IF_ERROR(EnsurePackedChannelsLastFilter(thread_pool,
                                                        filter_count_per_group,
                                                        input_channels_per_group,
+                                                       depthwise_nhwc_fastpath,
                                                        kernel_shape,
                                                        dilations));
   }

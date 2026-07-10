@@ -968,7 +968,8 @@ MlasConvSupportsDepthwiseChannelsLast2DFloatKernel(
     const size_t* Padding,
     const size_t* StrideShape,
     size_t FilterCount,
-    float Beta);
+    float Beta,
+    const MLAS_BACKEND_KERNEL_SELECTOR_CONFIG* BackendKernelSelectorConfig = nullptr);
 
 void
 MLASCALL
