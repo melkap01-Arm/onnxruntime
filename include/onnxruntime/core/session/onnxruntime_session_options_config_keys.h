@@ -526,6 +526,11 @@ static const char* const kOrtSessionOptionsQDQMatMulNBitsBlockSize = "session.qd
 // This is typically set automatically by InferenceSession when the NvTensorRTRTX EP is registered.
 static const char* const kOrtSessionOptionsEnableDQMatMulNBitsFusion = "session.enable_dq_matmulnbits_fusion";
 
+// Enable the CPU MatMul -> DynamicQuantMatMulFp8 graph transformer.
+// "0": disabled (default). "1": enabled.
+// This transformation changes FP32 MatMul numerical behavior by quantizing activations and constant weights to FP8.
+static const char* const kOrtSessionOptionsEnableMatMulFp8Fusion = "session.enable_matmul_fp8_fusion";
+
 // THIS OPTION IS NOT A REGULAR SESSION OPTION SINCE IT CAN BE MODIFIED AT ANY TIME
 // Meant to be used with SetEpDynamicOptions
 // Specify the type of workload for this session.

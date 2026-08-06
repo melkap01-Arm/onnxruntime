@@ -66,6 +66,8 @@ void MlasShrinkKleidiAIScratchIfTooLarge(std::vector<T>& buffer)
 // By default we should try for SME2 first before falling back to SME.
 inline const bool UseSME2 = MLAS_CPUIDINFO::GetCPUIDInfo().HasArm_SME2();
 inline const bool UseSME = MLAS_CPUIDINFO::GetCPUIDInfo().HasArm_SME();
+inline const bool UseFP8 = MLAS_CPUIDINFO::GetCPUIDInfo().HasArm_FP8();
+inline const bool UseSME2FP8 = UseSME2 && UseFP8;
 inline const std::string_view vendor_name = MLAS_CPUIDINFO::GetCPUIDInfo().GetCPUVendor();
 
 // Selects the convolution route for Arm® KleidiAI™
@@ -314,9 +316,63 @@ MLASCALL
 MlasDynamicQGemmBatch(
     const MLAS_GEMM_DYN_QUANT_SHAPE_PARAMS& Shape,
     const MLAS_GEMM_DYN_QUANT_DATA_PARAMS* DataParams,
-    const size_t BatchN,
+    const size_t BatchSize,
     MLAS_THREADPOOL* ThreadPool
     );
+
+#if !defined(DISABLE_FLOAT8_TYPES) && defined(MLAS_USE_KLEIDIAI_FP8)
+size_t
+MLASCALL
+MlasFp8GemmPackBSize(
+    size_t N,
+    size_t K,
+    size_t BlockSizeK,
+    size_t BlockSizeN,
+    mlas_fp8_mode Fp8Type
+    );
+
+size_t
+MLASCALL
+MlasFp8GemmPackBScaleSize(
+    size_t N,
+    size_t K,
+    size_t BlockSizeK,
+    size_t BlockSizeN,
+    mlas_fp8_mode Fp8Type
+    );
+
+bool
+MLASCALL
+MlasFp8GemmPackB(
+    size_t N,
+    size_t K,
+    const void* B,
+    size_t ldb,
+    const float* ScaleB,
+    size_t BlockSizeK,
+    size_t BlockSizeN,
+    mlas_fp8_mode Fp8Type,
+    void* PackedB,
+    float* PackedScaleB
+    );
+
+bool
+MLASCALL
+MlasFp8GemmPackedBIsSupported(
+    const MLAS_FP8_GEMM_SHAPE_PARAMS& Shape,
+    const MLAS_FP8_GEMM_DATA_PARAMS* DataParams,
+    const size_t BatchSize
+    );
+
+bool
+MLASCALL
+MlasFp8GemmBatch(
+    const MLAS_FP8_GEMM_SHAPE_PARAMS& Shape,
+    const MLAS_FP8_GEMM_DATA_PARAMS* DataParams,
+    const size_t BatchSize,
+    MLAS_THREADPOOL* ThreadPool
+    );
+#endif  // !defined(DISABLE_FLOAT8_TYPES) && defined(MLAS_USE_KLEIDIAI_FP8)
 
 bool
 MLASCALL

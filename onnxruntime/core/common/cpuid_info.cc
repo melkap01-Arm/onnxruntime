@@ -45,6 +45,38 @@
 #define HWCAP2_BF16 (1 << 14)
 #endif
 
+#ifndef HWCAP2_FPMR
+#define HWCAP2_FPMR (1UL << 48)
+#endif
+
+#ifndef HWCAP2_F8CVT
+#define HWCAP2_F8CVT (1UL << 51)
+#endif
+
+#ifndef HWCAP2_F8E4M3
+#define HWCAP2_F8E4M3 (1UL << 55)
+#endif
+
+#ifndef HWCAP2_F8E5M2
+#define HWCAP2_F8E5M2 (1UL << 56)
+#endif
+
+#ifndef HWCAP2_SME_F8F32
+#define HWCAP2_SME_F8F32 (1UL << 59)
+#endif
+
+static bool HasArmLinuxFp8() {
+#if !defined(__aarch64__)
+  return false;
+#else
+  // FPMR only proves the FP mode register exists. The FP8 kernels also execute
+  // FP8 conversion and SME FP8/F32 instructions, so require those runtime caps too.
+  constexpr unsigned long kRequiredFp8Caps =
+      HWCAP2_FPMR | HWCAP2_F8CVT | HWCAP2_F8E4M3 | HWCAP2_F8E5M2 | HWCAP2_SME_F8F32;
+  return (getauxval(AT_HWCAP2) & kRequiredFp8Caps) == kRequiredFp8Caps;
+#endif
+}
+
 #endif  // ARM
 
 #if defined(CPUIDINFO_ARCH_RISCV64)
@@ -203,6 +235,7 @@ void CPUIDInfo::ArmLinuxInit() {
     has_arm_neon_bf16_ = cpuinfo_has_arm_neon_bf16();
     has_arm_sme_ = cpuinfo_has_arm_sme();
     has_arm_sme2_ = cpuinfo_has_arm_sme2();
+    has_arm_fp8_ = HasArmLinuxFp8();
 
     const uint32_t core_cnt = cpuinfo_get_cores_count();
     core_uarchs_.resize(core_cnt, cpuinfo_uarch_unknown);
@@ -239,6 +272,7 @@ void CPUIDInfo::ArmLinuxInit() {
     has_arm_sve_i8mm_ = ((getauxval(AT_HWCAP2) & HWCAP2_SVEI8MM) != 0);
 
     has_arm_neon_bf16_ = ((getauxval(AT_HWCAP2) & HWCAP2_BF16) != 0);
+    has_arm_fp8_ = HasArmLinuxFp8();
   }
 }
 

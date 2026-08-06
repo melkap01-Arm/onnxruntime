@@ -1014,6 +1014,55 @@ void
     const float* Bias,
     void* PackedB);
 
+#if !defined(DISABLE_FLOAT8_TYPES)
+typedef
+size_t
+(MLASCALL MLAS_FP8_GEMM_PACK_B_SIZE_OVERRIDE)(
+    size_t N,
+    size_t K,
+    size_t BlockSizeK,
+    size_t BlockSizeN,
+    mlas_fp8_mode Fp8Type);
+
+typedef
+size_t
+(MLASCALL MLAS_FP8_GEMM_PACK_B_SCALE_SIZE_OVERRIDE)(
+    size_t N,
+    size_t K,
+    size_t BlockSizeK,
+    size_t BlockSizeN,
+    mlas_fp8_mode Fp8Type);
+
+typedef
+bool
+(MLASCALL MLAS_FP8_GEMM_PACK_B_OVERRIDE)(
+    size_t N,
+    size_t K,
+    const void* B,
+    size_t ldb,
+    const float* ScaleB,
+    size_t BlockSizeK,
+    size_t BlockSizeN,
+    mlas_fp8_mode Fp8Type,
+    void* PackedB,
+    float* PackedScaleB);
+
+typedef
+bool
+(MLASCALL MLAS_FP8_GEMM_PACKED_B_IS_SUPPORTED_OVERRIDE)(
+    const MLAS_FP8_GEMM_SHAPE_PARAMS& Shape,
+    const MLAS_FP8_GEMM_DATA_PARAMS* DataParams,
+    const size_t BatchN);
+
+typedef
+bool
+(MLASCALL MLAS_FP8_GEMM_BATCH_OVERRIDE)(
+    const MLAS_FP8_GEMM_SHAPE_PARAMS& Shape,
+    const MLAS_FP8_GEMM_DATA_PARAMS* DataParams,
+    const size_t BatchN,
+    MLAS_THREADPOOL* ThreadPool);
+#endif  // !defined(DISABLE_FLOAT8_TYPES)
+
 #if defined(__aarch64__) && defined(__linux__)
 typedef
 bool
@@ -1682,6 +1731,13 @@ struct MLAS_PLATFORM {
     MLAS_HALF_CONV_OVERRIDE* MlasHalfConvOverride = nullptr;
     MLAS_HALF_CONV_PACK_WEIGHTS_AND_BIAS_SIZE_OVERRIDE* MlasHalfConvPackWeightsAndBiasSizeOverride = nullptr;
     MLAS_HALF_CONV_PACK_WEIGHTS_AND_BIAS_OVERRIDE* MlasHalfConvPackWeightsAndBiasOverride = nullptr;
+#if !defined(DISABLE_FLOAT8_TYPES)
+    MLAS_FP8_GEMM_PACK_B_SIZE_OVERRIDE* MlasFp8GemmPackBSizeOverride = nullptr;
+    MLAS_FP8_GEMM_PACK_B_SCALE_SIZE_OVERRIDE* MlasFp8GemmPackBScaleSizeOverride = nullptr;
+    MLAS_FP8_GEMM_PACK_B_OVERRIDE* MlasFp8GemmPackBOverride = nullptr;
+    MLAS_FP8_GEMM_PACKED_B_IS_SUPPORTED_OVERRIDE* MlasFp8GemmPackedBIsSupportedOverride = nullptr;
+    MLAS_FP8_GEMM_BATCH_OVERRIDE* MlasFp8GemmBatchOverride = nullptr;
+#endif
     // MLAS Conv overrides
     MLAS_CONV_PREPARE_FLOAT_OVERRIDE* MlasConvPrepareOverride = nullptr;
     MLAS_CONV_FLOAT_OVERRIDE* MlasConvOverride = nullptr;

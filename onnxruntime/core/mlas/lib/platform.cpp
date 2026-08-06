@@ -726,6 +726,15 @@ Return Value:
         this->MlasHalfConvOverride = ArmKleidiAI::MlasHalfConv;
         this->MlasHalfConvPackWeightsAndBiasSizeOverride = ArmKleidiAI::MlasHalfConvPackWeightsAndBiasSize;
         this->MlasHalfConvPackWeightsAndBiasOverride = ArmKleidiAI::MlasHalfConvPackWeightsAndBias;
+#if !defined(DISABLE_FLOAT8_TYPES) && defined(MLAS_USE_KLEIDIAI_FP8)
+        if (ArmKleidiAI::UseSME2FP8) {
+            this->MlasFp8GemmPackBSizeOverride = ArmKleidiAI::MlasFp8GemmPackBSize;
+            this->MlasFp8GemmPackBScaleSizeOverride = ArmKleidiAI::MlasFp8GemmPackBScaleSize;
+            this->MlasFp8GemmPackBOverride = ArmKleidiAI::MlasFp8GemmPackB;
+            this->MlasFp8GemmPackedBIsSupportedOverride = ArmKleidiAI::MlasFp8GemmPackedBIsSupported;
+            this->MlasFp8GemmBatchOverride = ArmKleidiAI::MlasFp8GemmBatch;
+        }
+#endif
         this->MlasConvPrepareOverride = ArmKleidiAI::MlasConvPrepare;
         this->MlasConvOverride = ArmKleidiAI::MlasConv;
         this->MlasConvSGemmRouteOverride = ArmKleidiAI::MlasConvSGemmRoute;

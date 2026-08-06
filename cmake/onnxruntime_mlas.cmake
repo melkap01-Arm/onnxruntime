@@ -25,6 +25,7 @@ onnxruntime_add_static_library(onnxruntime_mlas
   ${MLAS_SRC_DIR}/halfgemm.cpp
   ${MLAS_SRC_DIR}/halfconv.cpp
   ${MLAS_SRC_DIR}/qgemm.cpp
+  ${MLAS_SRC_DIR}/qgemm_fp8.cpp
   ${MLAS_SRC_DIR}/qdwconv.cpp
   ${MLAS_SRC_DIR}/convolve.cpp
   ${MLAS_SRC_DIR}/sconv_nchw_depthwise_multiplier_greater_than_1.cpp
@@ -326,6 +327,26 @@ function(setup_mlas_source_for_windows)
 endfunction()
 
 function(setup_kleidiai)
+  include(CheckCXXCompilerFlag)
+  set(MLAS_KLEIDIAI_FP8_COMPILE_FLAG_CANDIDATES
+      "-march=armv9.2-a+sve+sve2+sme2+fp8+sme-f8f32"
+      "-march=armv9.4-a+fp8+sme2+sve"
+      "-march=armv9.2-a+sve+sve2+sme2+fp8")
+  unset(MLAS_KLEIDIAI_FP8_COMPILE_FLAGS)
+  unset(MLAS_KLEIDIAI_FP8_SUPPORTED)
+  foreach(MLAS_KLEIDIAI_FP8_COMPILE_FLAG_CANDIDATE IN LISTS MLAS_KLEIDIAI_FP8_COMPILE_FLAG_CANDIDATES)
+    if(NOT MLAS_KLEIDIAI_FP8_SUPPORTED)
+      string(MAKE_C_IDENTIFIER
+             "MLAS_KLEIDIAI_FP8_SUPPORTED_${MLAS_KLEIDIAI_FP8_COMPILE_FLAG_CANDIDATE}"
+             MLAS_KLEIDIAI_FP8_SUPPORTED_VAR)
+      check_cxx_compiler_flag("${MLAS_KLEIDIAI_FP8_COMPILE_FLAG_CANDIDATE}" ${MLAS_KLEIDIAI_FP8_SUPPORTED_VAR})
+      if(${MLAS_KLEIDIAI_FP8_SUPPORTED_VAR})
+        set(MLAS_KLEIDIAI_FP8_COMPILE_FLAGS "${MLAS_KLEIDIAI_FP8_COMPILE_FLAG_CANDIDATE}")
+        set(MLAS_KLEIDIAI_FP8_SUPPORTED TRUE)
+      endif()
+    endif()
+  endforeach()
+
   target_sources(onnxruntime_mlas PRIVATE
     ${MLAS_SRC_DIR}/kai_ukernel_interface.cpp
     ${MLAS_SRC_DIR}/kleidiai/sgemm_kleidiai.cpp
@@ -335,6 +356,14 @@ function(setup_kleidiai)
     ${MLAS_SRC_DIR}/kleidiai/convolve_kleidiai.cpp
     ${MLAS_SRC_DIR}/kleidiai/qgemm_kleidiai.cpp
   )
+  if(MLAS_KLEIDIAI_FP8_SUPPORTED AND NOT onnxruntime_DISABLE_FLOAT8_TYPES)
+    target_sources(onnxruntime_mlas PRIVATE
+      ${MLAS_SRC_DIR}/kleidiai/qgemm_fp8_kleidiai.cpp
+    )
+    set_source_files_properties(${MLAS_SRC_DIR}/kleidiai/qgemm_fp8_kleidiai.cpp
+      PROPERTIES COMPILE_FLAGS "${MLAS_KLEIDIAI_FP8_COMPILE_FLAGS}")
+    target_compile_definitions(onnxruntime_mlas PRIVATE MLAS_USE_KLEIDIAI_FP8=1)
+  endif()
   target_link_libraries(onnxruntime_mlas PRIVATE kleidiai)
   list(APPEND onnxruntime_EXTERNAL_LIBRARIES kleidiai)
   if(onnxruntime_USE_QMX_KLEIDIAI_COEXIST)

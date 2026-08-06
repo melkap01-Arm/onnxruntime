@@ -97,5 +97,35 @@ TEST(GraphTransformerUtilsTests, TestDQMatMulNBitsFusionConfigWithContribGating)
   EXPECT_TRUE(has_dq_matmulnbits_fusion);
 #endif
 }
+
+TEST(GraphTransformerUtilsTests, TestMatMulFp8FusionIsOptIn) {
+  CPUExecutionProvider cpu_ep(CPUExecutionProviderInfo{});
+  const auto& logger = DefaultLoggingManager().DefaultLogger();
+
+  auto transformers = optimizer_utils::GenerateTransformers(
+      TransformerLevel::Level2, {}, cpu_ep, logger);
+  const auto has_fp8_fusion = [](const auto& candidates) {
+    return std::any_of(candidates.begin(), candidates.end(), [](const auto& transformer) {
+      return transformer && transformer->Name() == "MatMulToDynamicQuantMatMulFp8Fusion";
+    });
+  };
+  EXPECT_FALSE(has_fp8_fusion(transformers));
+
+  SessionOptions session_options;
+  const auto status = session_options.config_options.AddConfigEntry(
+      kOrtSessionOptionsEnableMatMulFp8Fusion, "1");
+  ASSERT_TRUE(status.IsOK()) << status.ErrorMessage();
+
+#if !defined(DISABLE_CONTRIB_OPS) && !defined(DISABLE_FLOAT8_TYPES)
+  transformers = optimizer_utils::GenerateTransformers(
+      TransformerLevel::Level2, session_options, cpu_ep, logger);
+  EXPECT_TRUE(has_fp8_fusion(transformers));
+#else
+  EXPECT_ANY_THROW({
+    std::ignore = optimizer_utils::GenerateTransformers(
+        TransformerLevel::Level2, session_options, cpu_ep, logger);
+  });
+#endif
+}
 }  // namespace test
 }  // namespace onnxruntime

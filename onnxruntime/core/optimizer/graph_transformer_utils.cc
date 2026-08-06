@@ -62,6 +62,9 @@
 #include "core/optimizer/matmul_nbits_mlp_fusion.h"
 #include "core/optimizer/matmul_bn_fusion.h"
 #include "core/optimizer/matmul_integer_to_float.h"
+#if !defined(DISABLE_CONTRIB_OPS) && !defined(DISABLE_FLOAT8_TYPES)
+#include "core/optimizer/matmul_to_dynamic_quant_matmul_fp8_fusion.h"
+#endif
 #include "core/optimizer/matmul_scale_fusion.h"
 #include "core/optimizer/matmul_transpose_fusion.h"
 #include "core/optimizer/nchwc_transformer.h"
@@ -487,6 +490,16 @@ InlinedVector<std::unique_ptr<GraphTransformer>> GenerateTransformers(
       }
 
 #endif  // !defined(DISABLE_CONTRIB_OPS)
+#if !defined(DISABLE_CONTRIB_OPS) && !defined(DISABLE_FLOAT8_TYPES)
+      if (session_options.config_options.GetConfigOrDefault(
+              kOrtSessionOptionsEnableMatMulFp8Fusion, "0") == "1") {
+        transformers.emplace_back(std::make_unique<MatMulToDynamicQuantMatMulFp8Fusion>(cpu_ep));
+      }
+#else
+      ORT_ENFORCE(session_options.config_options.GetConfigOrDefault(
+                      kOrtSessionOptionsEnableMatMulFp8Fusion, "0") != "1",
+                  "MatMul FP8 fusion requires contrib ops and float8 types");
+#endif
       // The QDQFinalCleanupTransformer must run AFTER other transformers that fuse Q/DQ nodes. Otherwise, their
       // fusions might be prevented if this one removes a Q/DQ node too early.
       transformers.emplace_back(std::make_unique<QDQFinalCleanupTransformer>(enable_quant_qdq_cleanup));
