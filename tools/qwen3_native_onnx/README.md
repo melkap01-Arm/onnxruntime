@@ -68,13 +68,19 @@ com.microsoft::DynamicQuantMatMulFp8
 ```
 
 The setting is disabled by default because converting FP32 inputs and weights to FP8 changes numerical
-behavior. It can be passed to `onnxruntime_perf_test` with `-C`:
+behavior. For this Qwen model, each projection multiplies an activation with shape `[batch, seq, K]` by a
+constant weight with shape `[K, N]`. ONNX Runtime flattens the leading activation dimensions for the GEMM,
+so its row dimension is `M = batch × seq`. Set both dynamic dimensions explicitly when using
+`onnxruntime_perf_test`; with `-I`, unspecified free dimensions default to 1 and would therefore produce
+`M = 1`. The following example uses `batch = 1` and `seq = 16`, giving `M = 16`:
 
 ```bash
 <build-dir>/onnxruntime_perf_test \
   -e cpu \
   -o 99 \
   -C "session.enable_matmul_fp8_fusion|1" \
+  -f "batch:1" \
+  -f "seq:16" \
   -I \
   tools/qwen3_native_onnx/onnx_native_fp32/model.onnx
 ```
